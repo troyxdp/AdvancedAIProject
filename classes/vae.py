@@ -61,6 +61,16 @@ class VariationalAutoencoder():
         
     def get_output(self):
         return self._output
+    
+    def get_mean(self):
+        for layer in self._layers:
+            if isinstance(layer, SplitHeadFullyConnectedLayer):
+                return layer.get_mean()
+            
+    def get_log_var(self):
+        for layer in self._layers:
+            if isinstance(layer, SplitHeadFullyConnectedLayer):
+                return layer.get_log_var()
 
 
     # SETTER METHODS
@@ -371,19 +381,20 @@ if __name__ == '__main__':
     print("Error from array of 1's:")
     input = np.random.normal(1, 1, (28, 28))
     output = vae.forward(input)
+    output_size = output.shape[0] * output.shape[1]
     target = np.ones_like(output)
     for i in range(2000):
         output = vae.forward(input)
-        error = np.dot(np.subtract(target, output).flatten(), np.subtract(target, output).flatten())
+        error = (1 / output_size) * np.dot(np.subtract(target, output).flatten(), np.subtract(target, output).flatten()) + 0.5 * np.sum(vae.get_mean()**2 + np.exp(vae.get_log_var()) - 1 - vae.get_log_var())
         if i % 50 == 0:
             print(error)
 
         error_prime = output - target
         vae.back_propogate(
-            lr=0.0001,
+            lr=0.00001,
             error_prime=error_prime,
             clip_score = 1.0,
-            # momentum=0.1
+            momentum=0.1
         )
     print("\nSample output:")
     print(output)
@@ -396,5 +407,5 @@ if __name__ == '__main__':
     print("\nLoading network...")
     vae_1 = VariationalAutoencoder.load_network('/home/troyxdp/Documents/University Work/Advanced Artificial Intelligence/Project/networks/demo.pkl')
     print(vae_1)
-    print("\nDemo output:")
-    print(vae_1.forward(input))
+    # print("\nDemo output:")
+    # print(vae_1.forward(input))

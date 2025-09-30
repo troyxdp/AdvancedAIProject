@@ -180,6 +180,7 @@ class ConvolutionalLayer(Layer):
         # Return dilated kernel
         return kernel_out
     
+    # This code is from my HYP
     def update_velocity(self, weights_grad, bias_grad, momentum, lr):
         # Set velocity value if it has not been initialized
         if self._velocity_weights is None and self._velocity_bias is None:
@@ -190,6 +191,7 @@ class ConvolutionalLayer(Layer):
         self._velocity_weights = momentum * self._velocity_weights - lr * weights_grad
         self._velocity_bias = momentum * self._velocity_bias - lr * bias_grad
         
+    # This code is adapted from my HYP
     def update_layer(self, kernel_grads: np.ndarray, bias_grad: np.ndarray, lr: float, clip_value=10.0, momentum=None):
         # Check dimensionality of update values provided
         if not kernel_grads.shape == self._kernel.shape:
@@ -449,6 +451,7 @@ class FullyConnectedLayer(Layer):
         self._output = self._activation_fn(self._z_values.copy())
         return self._output
     
+    # This code is from my HYP
     def update_velocity(self, weights_grad, bias_grad, momentum, lr):
         # Set velocity value if it has not been initialized
         if self._velocity_weights is None and self._velocity_bias is None:
@@ -459,6 +462,7 @@ class FullyConnectedLayer(Layer):
         self._velocity_weights = momentum * self._velocity_weights - lr * weights_grad
         self._velocity_bias = momentum * self._velocity_bias - lr * bias_grad
 
+    # This code is from my HYP
     # Apply updates to layer
     def update_layer(
             self, 
