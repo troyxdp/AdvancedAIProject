@@ -19,6 +19,16 @@ class Layer(ABC):
         # Define Z values
         self._z_values: np.ndarray = None
 
+        # Adam terms
+        self._mw = None
+        self._mb = None
+        self._vw = None
+        self._vb = None
+        self._m_hat_w = None
+        self._v_hat_w = None
+        self._m_hat_b = None
+        self._v_hat_b = None
+
     # GETTER METHODS
     def get_input(self) -> np.ndarray:
         return self._input
@@ -42,8 +52,38 @@ class Layer(ABC):
         pass
     
     @abstractmethod
-    def update_layer(self, grad: np.ndarray):
+    def update_layer(
+        self, 
+        weights_grad: np.ndarray, 
+        bias_grad: np.ndarray, 
+        lr: float, 
+        epoch_num: int, 
+        clip_value=1.0, 
+        beta_1=None, 
+        beta_2=None
+    ):
         pass
+
+    # This code is from my HYP
+    def update_velocity(self, weights_grad, bias_grad, beta_1, beta_2, t):
+        # Set velocity value if it has not been initialized
+        if self._mw is None and self._mb is None and self._vw is None and self._vb is None:
+            self._mw = np.zeros_like(weights_grad, dtype=np.float64)
+            self._mb = np.zeros_like(bias_grad, dtype=np.float64)
+            self._vw = np.zeros_like(weights_grad, dtype=np.float64)
+            self._vb = np.zeros_like(bias_grad) if isinstance(bias_grad, np.ndarray) else 0
+        
+        # Set velocity terms
+        self._mw = beta_1 * self._mw + (1 - beta_1) * weights_grad
+        self._mb = beta_1 * self._mb + (1 - beta_1) * bias_grad
+        self._vw = beta_2 * self._vw + (1 - beta_2) * weights_grad * weights_grad
+        self._vb = beta_2 * self._vb + (1 - beta_2) * bias_grad * bias_grad
+
+        # Set m_hat and v_hat
+        self._m_hat_w = self._mw * (1 / (1 - np.power(beta_1, t)))
+        self._m_hat_b = self._mb * (1 / (1 - np.power(beta_1, t)))
+        self._v_hat_w = self._vw * (1 / (1 - np.power(beta_2, t)))
+        self._v_hat_b = self._vb * (1 / (1 - np.power(beta_2, t)))
     
     @abstractmethod
     def contains_nan(self):
@@ -73,10 +113,6 @@ class ConvolutionalLayer(Layer):
         # Initialize kernels
         self._kernel: np.ndarray = self._he_initialize_kernel(kernel_size)
         self._bias: float = self._initialize_biases()
-
-        # Velocity for momentum
-        self._velocity_weights = None
-        self._velocity_bias = None
 
 
     # GETTER METHODS
@@ -122,10 +158,6 @@ class ConvolutionalLayer(Layer):
     # FUNCTIONAL METHODS
     @abstractmethod
     def forward(self, x: np.ndarray):
-        pass
-
-    @abstractmethod
-    def update_layer(self, kernel_grads: np.ndarray, bias_grad: np.ndarray, lr: float, clip_value=10.0, momentum=None):
         pass
 
     def convolve(
@@ -180,19 +212,17 @@ class ConvolutionalLayer(Layer):
         # Return dilated kernel
         return kernel_out
     
-    # This code is from my HYP
-    def update_velocity(self, weights_grad, bias_grad, momentum, lr):
-        # Set velocity value if it has not been initialized
-        if self._velocity_weights is None and self._velocity_bias is None:
-            self._velocity_weights = np.zeros_like(weights_grad, dtype=np.float64)
-            self._velocity_bias = np.zeros_like(bias_grad, dtype=np.float64)
-        
-        # Set velocity value if it has been initialized
-        self._velocity_weights = momentum * self._velocity_weights - lr * weights_grad
-        self._velocity_bias = momentum * self._velocity_bias - lr * bias_grad
-        
     # This code is adapted from my HYP
-    def update_layer(self, kernel_grads: np.ndarray, bias_grad: np.ndarray, lr: float, clip_value=10.0, momentum=None):
+    def update_layer(
+            self, 
+            kernel_grads: np.ndarray, 
+            bias_grad: np.ndarray, 
+            lr: float, 
+            epoch_num: int, 
+            clip_value=1.0, 
+            beta_1=None, 
+            beta_2=None
+        ):
         # Check dimensionality of update values provided
         if not kernel_grads.shape == self._kernel.shape:
             raise ValueError("Error: kernel gradients do not match dimensionality of kernels array")
@@ -205,20 +235,16 @@ class ConvolutionalLayer(Layer):
             kernel_grads = kernel_grads * (clip_value / norm)
             bias_grad = bias_grad * (clip_value / norm)
 
-        # # Update kernels and biases
-        # self._kernel -= lr * kernel_grads
-        # self._bias -= lr * bias_grad
-
         # Initialize the values to change weights and bias by
         dW = None
         dB = None
 
         # Get values to update weights and bias by
-        if not momentum is None:
-            # Apply momentum
-            self.update_velocity(kernel_grads, bias_grad, momentum, lr)
-            dW = self._velocity_weights
-            dB = self._velocity_bias
+        if not beta_1 is None:
+            # Use Adam
+            self.update_velocity(kernel_grads, bias_grad, beta_1, beta_2, epoch_num)
+            dW = lr * (self._m_hat_w / (np.sqrt(self._v_hat_w) + 1e-8))
+            dB = lr * (self._m_hat_b / (np.sqrt(self._v_hat_b) + 1e-8))
         else:
             # Do not apply momentum
             dW = -lr * kernel_grads
@@ -386,10 +412,6 @@ class FullyConnectedLayer(Layer):
             self._input = np.zeros(self._input_size)
             self._output = np.zeros(self._output_size)
 
-        # Momentum stuff
-        self._velocity_weights = None
-        self._velocity_bias = None
-
     # SETTER METHODS
     def set_weights(self, weights:np.ndarray):
         # Check dimensions of inputted weights if self._weights is already set
@@ -452,25 +474,16 @@ class FullyConnectedLayer(Layer):
         return self._output
     
     # This code is from my HYP
-    def update_velocity(self, weights_grad, bias_grad, momentum, lr):
-        # Set velocity value if it has not been initialized
-        if self._velocity_weights is None and self._velocity_bias is None:
-            self._velocity_weights = np.zeros_like(weights_grad, dtype=np.float64)
-            self._velocity_bias = np.zeros_like(bias_grad, dtype=np.float64)
-        
-        # Set velocity value if it has been initialized
-        self._velocity_weights = momentum * self._velocity_weights - lr * weights_grad
-        self._velocity_bias = momentum * self._velocity_bias - lr * bias_grad
-
-    # This code is from my HYP
     # Apply updates to layer
     def update_layer(
             self, 
-            weights_grad, 
-            bias_grad, 
-            lr, 
-            clip_value=10.0, 
-            momentum=None
+            weights_grad: np.ndarray, 
+            bias_grad: np.ndarray, 
+            lr: float, 
+            epoch_num: int, 
+            clip_value=1.0, 
+            beta_1=None, 
+            beta_2=None
         ):
         # Apply clipping
         weights_grad_norm = np.linalg.norm(weights_grad)
@@ -478,20 +491,16 @@ class FullyConnectedLayer(Layer):
             weights_grad = weights_grad * (clip_value / float(weights_grad_norm))
             bias_grad = bias_grad * (clip_value / float(weights_grad_norm))
 
-        # # Update layer
-        # self._weights -= lr * weights_grad
-        # self._bias -= lr * bias_grad
-
         # Initialize the values to change weights and bias by
         dW = None
         dB = None
 
         # Get values to update weights and bias by
-        if not momentum is None:
-            # Apply momentum
-            self.update_velocity(weights_grad, bias_grad, momentum, lr)
-            dW = self._velocity_weights
-            dB = self._velocity_bias
+        if not beta_1 is None:
+            # Use Adam
+            self.update_velocity(weights_grad, bias_grad, beta_1, beta_2, epoch_num)
+            dW = lr * (self._m_hat_w / (np.sqrt(self._v_hat_w) + 1e-8))
+            dB = lr * (self._m_hat_b / (np.sqrt(self._v_hat_b) + 1e-8))
         else:
             # Do not apply momentum
             dW = -lr * weights_grad
@@ -597,7 +606,7 @@ class SplitHeadFullyConnectedLayer(Layer):
             weights_grad: tuple[np.ndarray, np.ndarray], 
             bias_grad: tuple[np.ndarray, np.ndarray], 
             lr: float, 
-            clip_value:float=10.0, 
+            clip_value:float=1.0, 
             momentum:float=None
         ):
         # Get the weights for each head

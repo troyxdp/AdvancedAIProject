@@ -118,14 +118,21 @@ class VariationalAutoencoder():
         self._output = x
         return self._output
 
-    def back_propogate(self, lr: float, error_prime: np.ndarray,  momentum=None, clip_score=1.0, l2_lambda=0):
+    def back_propogate(self, lr: float, error_prime: np.ndarray, epoch_num:int, beta_1=None, beta_2=None, clip_value=1.0):
         # Get first delta value
         delta: np.ndarray = error_prime * self._layers[-1].apply_activation_fn_dx() # multiply gradient of cost function with derivative of activation function applied to z values
         
         # Do backprop for final layer, which is a transposed convolutional layer
         bias_grad = np.sum(delta)
         weights_grad = ConvolutionalLayer.convolve(delta, self._layers[-1].get_input())
-        self._layers[-1].update_layer(weights_grad, bias_grad, lr, clip_score, momentum)
+        self._layers[-1].update_layer(
+            weights_grad=weights_grad, 
+            bias_grad=bias_grad, 
+            lr=lr, 
+            clip_value=clip_value, 
+            beta_1=beta_1, 
+            beta_2=beta_2
+        )
 
         # Propogate through the other layers from the 2nd last hidden layer to the 1st hidden layer at index 0 of self._layers
         # . is dot product, * is element-wise (hadamard) product, x is convolution
@@ -201,7 +208,14 @@ class VariationalAutoencoder():
                 bias_grad = (bias_grad_mean, bias_grad_log_var)
             
             # Update the layer
-            curr_layer.update_layer(weights_grad, bias_grad, lr, clip_score, momentum)
+            curr_layer.update_layer(
+                weights_grad=weights_grad, 
+                bias_grad=bias_grad, 
+                lr=lr, 
+                clip_value=clip_value, 
+                beta_1=beta_1, 
+                beta_2=beta_2
+            )
 
     def save_network(self, file_path: str):
         # Check that there are no NaN values in any of the layers
@@ -385,15 +399,15 @@ if __name__ == '__main__':
     target = np.ones_like(output)
     for i in range(2000):
         output = vae.forward(input)
-        error = (1 / output_size) * np.dot(np.subtract(target, output).flatten(), np.subtract(target, output).flatten()) + 0.5 * np.sum(vae.get_mean()**2 + np.exp(vae.get_log_var()) - 1 - vae.get_log_var())
+        error = (1 / output_size) * (np.dot(np.subtract(target, output).flatten(), np.subtract(target, output).flatten()) + 0.5 * np.sum(vae.get_mean()**2 + np.exp(vae.get_log_var()) - 1 - vae.get_log_var()))
         if i % 50 == 0:
             print(error)
 
-        error_prime = output - target
+        error_prime = (1 / output_size) * (output - target)
         vae.back_propogate(
-            lr=0.00001,
+            lr=0.00005,
             error_prime=error_prime,
-            clip_score = 1.0,
+            clip_value = 1.0,
             momentum=0.1
         )
     print("\nSample output:")

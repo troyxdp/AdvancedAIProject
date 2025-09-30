@@ -37,7 +37,8 @@ def train_model(
         num_epochs:float=120,
         initial_lr:float=0.00005,
         final_lr:float=0.00001,
-        momentum:float=None,
+        beta_1:float=None,
+        beta_2:float=None,
         clip_score:float=1.0,
         checkpoint_epoch=10,
         early_stop_threshold=20
@@ -86,12 +87,12 @@ def train_model(
 
                 # get error of output for statistics
                 # Reconstruction loss + KL divergence
-                error = (1 / (sample.shape[0] + sample.shape[1])) * np.dot(np.subtract(sample, output).flatten(), np.subtract(sample, output).flatten()) + 0.5 * np.sum(vae.get_mean()**2 + np.exp(vae.get_log_var()) - 1 - vae.get_log_var())
+                error = (1 / (sample.shape[0] * sample.shape[1])) * np.dot(np.subtract(sample, output).flatten(), np.subtract(sample, output).flatten()) + 0.5 * np.sum(vae.get_mean()**2 + np.exp(vae.get_log_var()) - 1 - vae.get_log_var())
                 train_error_this_epoch += error
 
                 # backpropogate
-                error_prime = np.subtract(output, sample)
-                training_network.back_propogate(lr=lr, error_prime=error_prime, momentum=momentum, clip_score=clip_score)
+                error_prime = (2 / (sample.shape[0] * sample.shape[1])) * np.subtract(output, sample)
+                training_network.back_propogate(lr=lr, error_prime=error_prime, epoch_num=epoch+1, beta_1=beta_1, beta_2=beta_2, clip_value=clip_score)
 
             # save statistics
             train_cycle_time = time.time() - train_cycle_start_time
@@ -110,7 +111,7 @@ def train_model(
 
                 # get error of output for statistics
                 # Reconstruction loss + KL divergence
-                error = (1 / (sample.shape[0] + sample.shape[1])) * np.dot(np.subtract(sample, output).flatten(), np.subtract(sample, output).flatten()) + 0.5 * np.sum(vae.get_mean()**2 + np.exp(vae.get_log_var()) - 1 - vae.get_log_var())
+                error = (1 / (sample.shape[0] * sample.shape[1])) * (np.dot(np.subtract(sample, output).flatten(), np.subtract(sample, output).flatten()) + 0.5 * np.sum(vae.get_mean()**2 + np.exp(vae.get_log_var()) - 1 - vae.get_log_var()))
                 val_error_this_epoch += error
 
             # save statistics 
@@ -130,7 +131,7 @@ def train_model(
                 training_network.save_network(os.path.join(output_folder, 'best_val_loss_network.pkl'))
                 best_val_loss = val_error_this_epoch
                 best_val_loss_epoch = epoch
-            if (epoch + 1) % checkpoint_epoch == 0:
+            if epoch % checkpoint_epoch == 0:
                 print(f"Checkpoint save at epoch {epoch + 1}")
                 training_network.save_network(os.path.join(output_folder, f"checkpoint_epoch_{epoch + 1}_save.pkl"))
 
@@ -343,10 +344,10 @@ if __name__ == '__main__':
         output_folder='/home/troyxdp/Documents/University Work/Advanced Artificial Intelligence/Project/networks/experiment_1',
         training_network=vae,
         num_epochs=10,
-        initial_lr=0.00005,
-        final_lr=0.00001,
-        momentum=0.1,
+        initial_lr=0.00001,
+        final_lr=0.000005,
+        momentum=None,
         clip_score=1.0,
-        checkpoint_epoch=10,
+        checkpoint_epoch=1,
         early_stop_threshold=20
     )
