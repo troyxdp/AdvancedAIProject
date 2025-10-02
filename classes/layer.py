@@ -60,13 +60,15 @@ class Layer(ABC):
         epoch_num: int, 
         clip_value=1.0, 
         beta_1=None, 
-        beta_2=None
+        beta_2=None,
+        l2_lambda=0
     ):
         pass
 
-    # This code is from my HYP
+    # Made with assistance from https://docs.pytorch.org/docs/stable/generated/torch.optim.AdamW.html
+    # Made with assistance from Kingma & Lei Ba (2015) - https://arxiv.org/pdf/1412.6980
     def update_velocity(self, weights_grad, bias_grad, beta_1, beta_2, t):
-        # Set velocity value if it has not been initialized
+        # Get all the terms for Adam - mw, mb, vw, vb. mw and mb are the "first moment estimates" and vw and vb are the "second raw moment estimates"
         if self._mw is None and self._mb is None and self._vw is None and self._vb is None:
             self._mw = np.zeros_like(weights_grad, dtype=np.float64)
             self._mb = np.zeros_like(bias_grad, dtype=np.float64)
@@ -212,27 +214,30 @@ class ConvolutionalLayer(Layer):
         # Return dilated kernel
         return kernel_out
     
-    # This code is adapted from my HYP
+
+    # Made with assistance from https://docs.pytorch.org/docs/stable/generated/torch.optim.AdamW.html
+    # Made with assistance from Kingma & Lei Ba (2015) - https://arxiv.org/pdf/1412.6980
     def update_layer(
             self, 
-            kernel_grads: np.ndarray, 
+            weights_grad: np.ndarray, 
             bias_grad: np.ndarray, 
             lr: float, 
             epoch_num: int, 
             clip_value=1.0, 
             beta_1=None, 
-            beta_2=None
+            beta_2=None,
+            l2_lambda=0
         ):
         # Check dimensionality of update values provided
-        if not kernel_grads.shape == self._kernel.shape:
+        if not weights_grad.shape == self._kernel.shape:
             raise ValueError("Error: kernel gradients do not match dimensionality of kernels array")
         
         # Find the greatest gradient norm
-        norm = np.linalg.norm(kernel_grads)
+        norm = np.linalg.norm(weights_grad)
 
         # Apply clipping
         if norm > clip_value:
-            kernel_grads = kernel_grads * (clip_value / norm)
+            weights_grad = weights_grad * (clip_value / norm)
             bias_grad = bias_grad * (clip_value / norm)
 
         # Initialize the values to change weights and bias by
@@ -242,12 +247,12 @@ class ConvolutionalLayer(Layer):
         # Get values to update weights and bias by
         if not beta_1 is None:
             # Use Adam
-            self.update_velocity(kernel_grads, bias_grad, beta_1, beta_2, epoch_num)
-            dW = lr * (self._m_hat_w / (np.sqrt(self._v_hat_w) + 1e-8))
-            dB = lr * (self._m_hat_b / (np.sqrt(self._v_hat_b) + 1e-8))
+            self.update_velocity(weights_grad, bias_grad, beta_1, beta_2, epoch_num)
+            dW = -(lr * (self._m_hat_w / (np.sqrt(self._v_hat_w) + 1e-8)) + lr * l2_lambda * self._kernel)
+            dB = -(lr * (self._m_hat_b / (np.sqrt(self._v_hat_b) + 1e-8)) + lr * l2_lambda * self._bias)
         else:
             # Do not apply momentum
-            dW = -lr * kernel_grads
+            dW = -lr * weights_grad
             dB = -lr * bias_grad
 
         # Update layer
@@ -473,8 +478,9 @@ class FullyConnectedLayer(Layer):
         self._output = self._activation_fn(self._z_values.copy())
         return self._output
     
-    # This code is from my HYP
     # Apply updates to layer
+    # Made with assistance from https://docs.pytorch.org/docs/stable/generated/torch.optim.AdamW.html
+    # Made with assistance from Kingma & Lei Ba (2015) - https://arxiv.org/pdf/1412.6980
     def update_layer(
             self, 
             weights_grad: np.ndarray, 
@@ -483,7 +489,8 @@ class FullyConnectedLayer(Layer):
             epoch_num: int, 
             clip_value=1.0, 
             beta_1=None, 
-            beta_2=None
+            beta_2=None,
+            l2_lambda=0
         ):
         # Apply clipping
         weights_grad_norm = np.linalg.norm(weights_grad)
@@ -499,8 +506,8 @@ class FullyConnectedLayer(Layer):
         if not beta_1 is None:
             # Use Adam
             self.update_velocity(weights_grad, bias_grad, beta_1, beta_2, epoch_num)
-            dW = lr * (self._m_hat_w / (np.sqrt(self._v_hat_w) + 1e-8))
-            dB = lr * (self._m_hat_b / (np.sqrt(self._v_hat_b) + 1e-8))
+            dW = -(lr * (self._m_hat_w / (np.sqrt(self._v_hat_w) + 1e-8)) + lr * l2_lambda * self._weights) 
+            dB = -(lr * (self._m_hat_b / (np.sqrt(self._v_hat_b) + 1e-8)) + lr * l2_lambda * self._bias)
         else:
             # Do not apply momentum
             dW = -lr * weights_grad
@@ -606,8 +613,11 @@ class SplitHeadFullyConnectedLayer(Layer):
             weights_grad: tuple[np.ndarray, np.ndarray], 
             bias_grad: tuple[np.ndarray, np.ndarray], 
             lr: float, 
-            clip_value:float=1.0, 
-            momentum:float=None
+            epoch_num: int, 
+            clip_value=1.0, 
+            beta_1=None, 
+            beta_2=None,
+            l2_lambda=0
         ):
         # Get the weights for each head
         mean_weights_grad = weights_grad[0]
@@ -629,8 +639,26 @@ class SplitHeadFullyConnectedLayer(Layer):
             log_var_bias_grad = log_var_bias_grad * (clip_value / float(max_norm))
 
         # Update each layer
-        self._mean_layer.update_layer(mean_weights_grad, mean_bias_grad, lr, clip_value, momentum)
-        self._log_var_layer.update_layer(log_var_weights_grad, log_var_bias_grad, lr, clip_value, momentum)
+        self._mean_layer.update_layer(
+            weights_grad=mean_weights_grad, 
+            bias_grad=mean_bias_grad, 
+            lr=lr, 
+            epoch_num=epoch_num,
+            clip_value=clip_value, 
+            beta_1=beta_1,
+            beta_2=beta_2,
+            l2_lambda=l2_lambda
+        )
+        self._log_var_layer.update_layer(
+            weights_grad=log_var_weights_grad, 
+            bias_grad=log_var_bias_grad, 
+            lr=lr, 
+            epoch_num=epoch_num,
+            clip_value=clip_value, 
+            beta_1=beta_1,
+            beta_2=beta_2,
+            l2_lambda=l2_lambda
+        )
 
     def __str__(self):
         to_ret = 'SPLIT HEAD LAYER'

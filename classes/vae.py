@@ -118,7 +118,7 @@ class VariationalAutoencoder():
         self._output = x
         return self._output
 
-    def back_propogate(self, lr: float, error_prime: np.ndarray, epoch_num:int, beta_1=None, beta_2=None, clip_value=1.0):
+    def back_propogate(self, lr: float, error_prime: np.ndarray, epoch_num:int, beta_1=None, beta_2=None, kl_beta=1.0, l2_lambda=0, clip_value=0.8):
         # Get first delta value
         delta: np.ndarray = error_prime * self._layers[-1].apply_activation_fn_dx() # multiply gradient of cost function with derivative of activation function applied to z values
         
@@ -131,7 +131,9 @@ class VariationalAutoencoder():
             lr=lr, 
             clip_value=clip_value, 
             beta_1=beta_1, 
-            beta_2=beta_2
+            beta_2=beta_2,
+            epoch_num=epoch_num,
+            l2_lambda=l2_lambda
         )
 
         # Propogate through the other layers from the 2nd last hidden layer to the 1st hidden layer at index 0 of self._layers
@@ -173,7 +175,7 @@ class VariationalAutoencoder():
                 if isinstance(next_layer, FullyConnectedLayer):
                     delta = np.reshape(np.dot(next_layer.get_weights().transpose(), delta), curr_layer.get_output_shape()) * act_fn_dx
                 elif isinstance(next_layer, RegularConvolutionalLayer):
-                    # delta_l = delta_l+1 x W_rotated_(l+1) *f s_l'(z_l) where *f is full mode convolution
+                    # delta_l = delta_l+1 xf W_rotated_(l+1) * s_l'(z_l) where xf is full mode convolution
                     delta = ConvolutionalLayer.convolve(x=delta, kernel=next_layer.get_rotated_kernel(), bias=None, p=next_layer.get_kernel_shape()[0]-1) * act_fn_dx
                 else:
                     raise Exception("Error: can only have a regular convolution layer followed by a fully connected layer or another regular convolution layer in a VAE")
@@ -193,8 +195,8 @@ class VariationalAutoencoder():
                 # Can only be followed by a fully connected layer in the decoder
                 # Get the delta value
                 delta_z = np.dot(next_layer.get_weights().transpose(), delta)
-                delta_mu = delta_z + curr_layer.get_mean()
-                delta_sigma = 0.5 * (delta_z * curr_layer.get_epsilon() * np.exp(0.5 * curr_layer.get_log_var()) + np.exp(curr_layer.get_log_var()) - 1)
+                delta_mu = delta_z + kl_beta * curr_layer.get_mean()
+                delta_sigma = 0.5 * (delta_z * curr_layer.get_epsilon() * np.exp(0.5 * curr_layer.get_log_var()) + kl_beta * (np.exp(curr_layer.get_log_var()) - 1))
                 delta = (delta_mu, delta_sigma)
 
                 # Get the weights and bias grads
@@ -214,7 +216,9 @@ class VariationalAutoencoder():
                 lr=lr, 
                 clip_value=clip_value, 
                 beta_1=beta_1, 
-                beta_2=beta_2
+                beta_2=beta_2,
+                epoch_num=epoch_num,
+                l2_lambda=l2_lambda
             )
 
     def save_network(self, file_path: str):
@@ -233,13 +237,6 @@ class VariationalAutoencoder():
         with open(file_path, 'rb') as f:
             to_ret = pickle.load(f)
 
-        # Check network is valid
-        for i in range(len(to_ret._layers) - 1):
-            curr_layer = to_ret.get_layer(i)
-            next_layer = to_ret.get_layer(i + 1)
-            if isinstance(curr_layer, FullyConnectedLayer) and isinstance(next_layer,  FullyConnectedLayer) and curr_layer._output_size != next_layer._input_size:
-                raise ValueError("Error: invalid network provided")
-            
         # Return network
         return to_ret
     
@@ -252,174 +249,3 @@ class VariationalAutoencoder():
             to_ret += '\n=================================================================='
         to_ret += '\n..................................................................'
         return to_ret
-
-    def __repr__(self):
-        return self.__str__()
-    
-
-
-if __name__ == '__main__':
-    # Instantiate VAE
-    vae = VariationalAutoencoder()
-
-    # ENCODER
-    # Layer 1
-    layer_1 = RegularConvolutionalLayer(
-        kernel_size=3,
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu_dx,
-        input_dims=(28, 28)
-    )
-    vae.append_layer(layer_1)
-    # Layer 2
-    layer_2 = RegularConvolutionalLayer(
-        kernel_size=3,
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu_dx,
-        input_dims=(26, 26)
-    )
-    vae.append_layer(layer_2)
-    # Layer 3
-    layer_3 = RegularConvolutionalLayer(
-        kernel_size=5,
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu_dx,
-        input_dims=(24, 24)
-    )
-    vae.append_layer(layer_3)
-    # Layer 4
-    layer_4 = RegularConvolutionalLayer(
-        kernel_size=5,
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu_dx,
-        input_dims=(20, 20)
-    )
-    vae.append_layer(layer_4)
-    # Layer 5
-    layer_5 = RegularConvolutionalLayer(
-        kernel_size=5,
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu_dx,
-        input_dims=(16, 16)
-    )
-    vae.append_layer(layer_5)
-    # Layer 7
-    layer_7 = FullyConnectedLayer(
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu_dx,
-        num_inputs=12*12,
-        num_outputs=8*8
-    )
-    vae.append_layer(layer_7)
-    # Layer 8
-    mean_layer = FullyConnectedLayer(
-        activation_fn=VariationalAutoencoder.linear,
-        activation_fn_dx=VariationalAutoencoder.linear_dx,
-        num_inputs=8*8,
-        num_outputs=4*4
-    )
-    log_var_layer = FullyConnectedLayer(
-        activation_fn=VariationalAutoencoder.linear,
-        activation_fn_dx=VariationalAutoencoder.linear_dx,
-        num_inputs=8*8,
-        num_outputs=4*4
-    )
-    layer_8 = SplitHeadFullyConnectedLayer(
-        mean_layer=mean_layer,
-        log_var_layer=log_var_layer
-    )
-    vae.append_layer(layer_8)
-
-    # DECODER
-    # Layer 9
-    layer_9 = FullyConnectedLayer(
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu_dx,
-        num_inputs=4*4,
-        num_outputs=8*8,
-    )
-    vae.append_layer(layer_9)
-    # Layer 10
-    layer_10 = TransposedConvolutionalLayer(
-        kernel_size=5,
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu_dx,
-        input_dims=(8, 8)
-    )
-    vae.append_layer(layer_10)
-    # Layer 11
-    layer_11 = TransposedConvolutionalLayer(
-        kernel_size=5,
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu,
-        input_dims=(12, 12)
-    )
-    vae.append_layer(layer_11)
-    # Layer 12
-    layer_12 = TransposedConvolutionalLayer(
-        kernel_size=5,
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu,
-        input_dims=(16, 16)
-    )
-    vae.append_layer(layer_12)
-    # Layer 13
-    layer_13 = TransposedConvolutionalLayer(
-        kernel_size=5,
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu,
-        input_dims=(20, 20)
-    )
-    vae.append_layer(layer_13)
-    # Layer 14
-    layer_14 = TransposedConvolutionalLayer(
-        kernel_size=3,
-        activation_fn=VariationalAutoencoder.relu,
-        activation_fn_dx=VariationalAutoencoder.relu,
-        input_dims=(24, 24)
-    )
-    vae.append_layer(layer_14)
-    # Layer 15
-    layer_15 = TransposedConvolutionalLayer(
-        kernel_size=3,
-        activation_fn=VariationalAutoencoder.linear,
-        activation_fn_dx=VariationalAutoencoder.linear,
-        input_dims=(26, 26)
-    )
-    vae.append_layer(layer_15)
-    print(vae)
-
-
-    # Test backprop
-    print()
-    print("Error from array of 1's:")
-    input = np.random.normal(1, 1, (28, 28))
-    output = vae.forward(input)
-    output_size = output.shape[0] * output.shape[1]
-    target = np.ones_like(output)
-    for i in range(2000):
-        output = vae.forward(input)
-        error = (1 / output_size) * (np.dot(np.subtract(target, output).flatten(), np.subtract(target, output).flatten()) + 0.5 * np.sum(vae.get_mean()**2 + np.exp(vae.get_log_var()) - 1 - vae.get_log_var()))
-        if i % 50 == 0:
-            print(error)
-
-        error_prime = (1 / output_size) * (output - target)
-        vae.back_propogate(
-            lr=0.00005,
-            error_prime=error_prime,
-            clip_value = 1.0,
-            momentum=0.1
-        )
-    print("\nSample output:")
-    print(output)
-
-    # Test saving
-    print("\nSaving network...")
-    vae.save_network('/home/troyxdp/Documents/University Work/Advanced Artificial Intelligence/Project/networks/demo.pkl')
-
-    # Test loading
-    print("\nLoading network...")
-    vae_1 = VariationalAutoencoder.load_network('/home/troyxdp/Documents/University Work/Advanced Artificial Intelligence/Project/networks/demo.pkl')
-    print(vae_1)
-    # print("\nDemo output:")
-    # print(vae_1.forward(input))

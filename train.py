@@ -13,6 +13,7 @@ from classes.vae import VariationalAutoencoder
 from classes.layer import *
 from classes.mnist_dataloader import MnistDataloader
 
+# This class is the same as in my HYP
 class EpochStatistics():
 
     def __init__(self, loss: float, epoch_time: float):
@@ -24,7 +25,8 @@ class EpochStatistics():
     
     def get_epoch_time(self):
         return self._epoch_time
-    
+
+# This code is adapted from my HYP 
 def train_model(
         # Dataset paths and info
         train_images_path:str,
@@ -37,8 +39,12 @@ def train_model(
         num_epochs:float=120,
         initial_lr:float=0.00005,
         final_lr:float=0.00001,
+        initial_kl_beta:float=0.1,
+        final_kl_beta:float=1.0,
+        kl_beta_step:float=0.1,
         beta_1:float=None,
         beta_2:float=None,
+        l2_lambda:float=1e-5,
         clip_score:float=1.0,
         checkpoint_epoch=10,
         early_stop_threshold=20
@@ -77,6 +83,7 @@ def train_model(
             print(f"Epoch {epoch + 1}...")
             # get learning rate
             lr = _determine_epoch_learning_rate(epoch, num_epochs, initial_lr, final_lr)
+            kl_beta = _determine_kl_beta(epoch, initial_kl_beta, final_kl_beta, kl_beta_step)
 
             # train cycle
             train_cycle_start_time = time.time()
@@ -92,7 +99,7 @@ def train_model(
 
                 # backpropogate
                 error_prime = (2 / (sample.shape[0] * sample.shape[1])) * np.subtract(output, sample)
-                training_network.back_propogate(lr=lr, error_prime=error_prime, epoch_num=epoch+1, beta_1=beta_1, beta_2=beta_2, clip_value=clip_score)
+                training_network.back_propogate(lr=lr, error_prime=error_prime, epoch_num=epoch+1, beta_1=beta_1, beta_2=beta_2, kl_beta=kl_beta, l2_lambda=l2_lambda, clip_value=clip_score)
 
             # save statistics
             train_cycle_time = time.time() - train_cycle_start_time
@@ -206,6 +213,11 @@ def _determine_epoch_learning_rate(epoch, num_epochs, initial_lr, final_lr):
     if num_epochs == 1:
         return initial_lr
     return initial_lr + epoch * ((final_lr - initial_lr) / (num_epochs - 1)) # num_epochs - 1 so that it cancels with epoch on the largest value of epoch
+
+def _determine_kl_beta(epoch:int, initial_beta:float, max_kl_beta:float, increase_step:float):
+    return float(min(initial_beta + epoch * increase_step, max_kl_beta))
+
+
 
 if __name__ == '__main__':
     # Instantiate VAE
@@ -331,8 +343,8 @@ if __name__ == '__main__':
     # Layer 15
     layer_15 = TransposedConvolutionalLayer(
         kernel_size=3,
-        activation_fn=VariationalAutoencoder.linear,
-        activation_fn_dx=VariationalAutoencoder.linear,
+        activation_fn=VariationalAutoencoder.sigmoid,
+        activation_fn_dx=VariationalAutoencoder.sigmoid_dx,
         input_dims=(26, 26)
     )
     vae.append_layer(layer_15)
@@ -343,11 +355,15 @@ if __name__ == '__main__':
         val_percentage=0.2,
         output_folder='/home/troyxdp/Documents/University Work/Advanced Artificial Intelligence/Project/networks/experiment_1',
         training_network=vae,
-        num_epochs=10,
+        num_epochs=20,
         initial_lr=0.00001,
         final_lr=0.000005,
-        momentum=None,
+        initial_kl_beta=0.1,
+        final_kl_beta=1.0,
+        kl_beta_step=0.1,
+        beta_1=0.9,
+        beta_2=0.999,
         clip_score=1.0,
-        checkpoint_epoch=1,
-        early_stop_threshold=20
+        checkpoint_epoch=2,
+        early_stop_threshold=10
     )
